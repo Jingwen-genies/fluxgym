@@ -25,3 +25,8 @@ bdsqlsz/flux1-dev2pro-single:
     license_name: flux-1-dev-non-commercial-license
     license_link: https://huggingface.co/black-forest-labs/FLUX.1-dev/blob/main/LICENSE.md
     file: flux1-dev2pro.safetensors
+sdxl-base-1.0:
+    base: stabilityai/stable-diffusion-xl-base-1.0
+    file: sd_xl_base_1.0.safetensors
+    repo: stabilityai/stable-diffusion-xl-base-1.0
+    

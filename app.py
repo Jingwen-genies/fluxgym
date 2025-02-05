@@ -21,7 +21,11 @@ from argparse import Namespace
 import train_network
 import toml
 import re
+
+from caption_generation_openai import generate_caption
+
 MAX_IMAGES = 150
+PROMPT_FOLDER = "prompts"
 
 with open('models.yaml', 'r') as file:
     models = yaml.safe_load(file)
@@ -266,6 +270,38 @@ def create_dataset(destination_folder, size, *inputs):
     print(f"destination_folder {destination_folder}")
     return destination_folder
 
+def run_captioning_openai(images, concept_sentence, additional_notes, *captions):
+    print(f"run_captioning")
+    print(f"concept sentence {concept_sentence}")
+    print(f"captions {captions}")
+
+    # Initialize the list to store generated captions
+    captions = list(captions)
+
+    for i, image_path in enumerate(images):
+        try:
+            print(f"Processing image: {image_path}")
+            if isinstance(image_path, str):  # If image is a file path
+                # Generate caption using the imported function
+                caption_text = generate_caption(image_path, system_prompt=additional_notes)
+                
+                print(f"caption_text = {caption_text}, concept_sentence={concept_sentence}")
+                
+                # Append the concept sentence to the generated caption
+                if concept_sentence:
+                    caption_text = f"{concept_sentence} {caption_text}"
+
+                # Update the captions list
+                captions[i] = caption_text
+            else:
+                captions[i] = "Error: No caption generated"
+
+        except Exception as e:
+            print(f"Error processing image {image_path}: {e}")
+            captions[i] = "Error generating caption!!!"
+
+        # Yield the updated captions list to update the UI
+        yield captions
 
 def run_captioning(images, concept_sentence, *captions):
     print(f"run_captioning")
@@ -326,49 +362,57 @@ def download(base_model):
     model = models[base_model]
     model_file = model["file"]
     repo = model["repo"]
+    if "flux" in base_model:
+        # download unet
+        if base_model == "flux-dev" or base_model == "flux-schnell":
+            unet_folder = "models/unet"
+        else:
+            unet_folder = f"models/unet/{repo}"
+        unet_path = os.path.join(unet_folder, model_file)
+        if not os.path.exists(unet_path):
+            os.makedirs(unet_folder, exist_ok=True)
+            gr.Info(f"Downloading base model: {base_model}. Please wait. (You can check the terminal for the download progress)", duration=None)
+            print(f"download {base_model}")
+            hf_hub_download(repo_id=repo, local_dir=unet_folder, filename=model_file)
 
-    # download unet
-    if base_model == "flux-dev" or base_model == "flux-schnell":
-        unet_folder = "models/unet"
-    else:
-        unet_folder = f"models/unet/{repo}"
-    unet_path = os.path.join(unet_folder, model_file)
-    if not os.path.exists(unet_path):
-        os.makedirs(unet_folder, exist_ok=True)
-        gr.Info(f"Downloading base model: {base_model}. Please wait. (You can check the terminal for the download progress)", duration=None)
-        print(f"download {base_model}")
-        hf_hub_download(repo_id=repo, local_dir=unet_folder, filename=model_file)
+        # download vae
+        vae_folder = "models/vae"
+        vae_path = os.path.join(vae_folder, "ae.sft")
+        if not os.path.exists(vae_path):
+            os.makedirs(vae_folder, exist_ok=True)
+            gr.Info(f"Downloading vae")
+            print(f"downloading ae.sft...")
+            hf_hub_download(repo_id="cocktailpeanut/xulf-dev", local_dir=vae_folder, filename="ae.sft")
 
-    # download vae
-    vae_folder = "models/vae"
-    vae_path = os.path.join(vae_folder, "ae.sft")
-    if not os.path.exists(vae_path):
-        os.makedirs(vae_folder, exist_ok=True)
-        gr.Info(f"Downloading vae")
-        print(f"downloading ae.sft...")
-        hf_hub_download(repo_id="cocktailpeanut/xulf-dev", local_dir=vae_folder, filename="ae.sft")
+        # download clip
+        clip_folder = "models/clip"
+        clip_l_path = os.path.join(clip_folder, "clip_l.safetensors")
+        if not os.path.exists(clip_l_path):
+            os.makedirs(clip_folder, exist_ok=True)
+            gr.Info(f"Downloading clip...")
+            print(f"download clip_l.safetensors")
+            hf_hub_download(repo_id="comfyanonymous/flux_text_encoders", local_dir=clip_folder, filename="clip_l.safetensors")
 
-    # download clip
-    clip_folder = "models/clip"
-    clip_l_path = os.path.join(clip_folder, "clip_l.safetensors")
-    if not os.path.exists(clip_l_path):
-        os.makedirs(clip_folder, exist_ok=True)
-        gr.Info(f"Downloading clip...")
-        print(f"download clip_l.safetensors")
-        hf_hub_download(repo_id="comfyanonymous/flux_text_encoders", local_dir=clip_folder, filename="clip_l.safetensors")
-
-    # download t5xxl
-    t5xxl_path = os.path.join(clip_folder, "t5xxl_fp16.safetensors")
-    if not os.path.exists(t5xxl_path):
-        print(f"download t5xxl_fp16.safetensors")
-        gr.Info(f"Downloading t5xxl...")
-        hf_hub_download(repo_id="comfyanonymous/flux_text_encoders", local_dir=clip_folder, filename="t5xxl_fp16.safetensors")
-
+        # download t5xxl
+        t5xxl_path = os.path.join(clip_folder, "t5xxl_fp16.safetensors")
+        if not os.path.exists(t5xxl_path):
+            print(f"download t5xxl_fp16.safetensors")
+            gr.Info(f"Downloading t5xxl...")
+            hf_hub_download(repo_id="comfyanonymous/flux_text_encoders", local_dir=clip_folder, filename="t5xxl_fp16.safetensors")
+    elif "sdxl" in base_model:
+        # download sdxl base
+        checkpoint_folder = "models/checkpoints/sdxl"
+        if not os.path.exists(checkpoint_folder):
+            os.makedirs(checkpoint_folder, exist_ok=True)
+            gr.Info(f"Downloading base model: {base_model}. Please wait. (You can check the terminal for the download progress)", duration=None)
+            print(f"download {base_model}")
+            hf_hub_download(repo_id=repo, local_dir=checkpoint_folder, filename=model_file)
 
 def resolve_path(p):
     current_dir = os.path.dirname(os.path.abspath(__file__))
     norm_path = os.path.normpath(os.path.join(current_dir, p))
     return f"\"{norm_path}\""
+
 def resolve_path_without_quotes(p):
     current_dir = os.path.dirname(os.path.abspath(__file__))
     norm_path = os.path.normpath(os.path.join(current_dir, p))
@@ -391,8 +435,7 @@ def gen_sh(
     sample_every_n_steps,
     *advanced_components
 ):
-
-    print(f"gen_sh: network_dim:{network_dim}, max_train_epochs={max_train_epochs}, save_every_n_epochs={save_every_n_epochs}, timestep_sampling={timestep_sampling}, guidance_scale={guidance_scale}, vram={vram}, sample_prompts={sample_prompts}, sample_every_n_steps={sample_every_n_steps}")
+    print(f"gen_sh: network_dim:{network_dim}, max_train_epochs={max_train_epochs}, save_every_n_epochs={save_every_n_epochs}")
 
     output_dir = resolve_path(f"outputs/{output_name}")
     sample_prompts_path = resolve_path(f"outputs/{output_name}/sample_prompts.txt")
@@ -403,28 +446,18 @@ def gen_sh(
         line_break = "^"
         file_type = "bat"
 
-    ############# Sample args ########################
+    # Sample args
     sample = ""
     if len(sample_prompts) > 0 and sample_every_n_steps > 0:
         sample = f"""--sample_prompts={sample_prompts_path} --sample_every_n_steps="{sample_every_n_steps}" {line_break}"""
 
-
-    ############# Optimizer args ########################
-#    if vram == "8G":
-#        optimizer = f"""--optimizer_type adafactor {line_break}
-#    --optimizer_args "relative_step=False" "scale_parameter=False" "warmup_init=False" {line_break}
-#        --split_mode {line_break}
-#        --network_args "train_blocks=single" {line_break}
-#        --lr_scheduler constant_with_warmup {line_break}
-#        --max_grad_norm 0.0 {line_break}"""
+    # Optimizer args
     if vram == "16G":
-        # 16G VRAM
         optimizer = f"""--optimizer_type adafactor {line_break}
   --optimizer_args "relative_step=False" "scale_parameter=False" "warmup_init=False" {line_break}
   --lr_scheduler constant_with_warmup {line_break}
   --max_grad_norm 0.0 {line_break}"""
     elif vram == "12G":
-      # 12G VRAM
         optimizer = f"""--optimizer_type adafactor {line_break}
   --optimizer_args "relative_step=False" "scale_parameter=False" "warmup_init=False" {line_break}
   --split_mode {line_break}
@@ -432,25 +465,56 @@ def gen_sh(
   --lr_scheduler constant_with_warmup {line_break}
   --max_grad_norm 0.0 {line_break}"""
     else:
-        # 20G+ VRAM
         optimizer = f"--optimizer_type adamw8bit {line_break}"
 
-
-    #######################################################
+    # Generate training command based on model type
     model_config = models[base_model]
     model_file = model_config["file"]
     repo = model_config["repo"]
-    if base_model == "flux-dev" or base_model == "flux-schnell":
-        model_folder = "models/unet"
+    
+    if "sdxl" in base_model:
+        # SDXL training command
+        checkpoint_path = resolve_path(f"models/checkpoints/sdxl/{model_file}")
+        sh = f"""accelerate launch {line_break}
+  --mixed_precision bf16 {line_break}
+  --num_cpu_threads_per_process 1 {line_break}
+  sd-scripts/sdxl_train_network.py {line_break}
+  --pretrained_model_name_or_path {checkpoint_path} {line_break}
+  --cache_latents_to_disk {line_break}
+  --save_model_as safetensors {line_break}
+  --sdpa --persistent_data_loader_workers {line_break}
+  --max_data_loader_n_workers {workers} {line_break}
+  --seed {seed} {line_break}
+  --gradient_checkpointing {line_break}
+  --mixed_precision bf16 {line_break}
+  --save_precision bf16 {line_break}
+  --network_module networks.lora {line_break}
+  --network_dim {network_dim} {line_break}
+  {optimizer}{sample}
+  --learning_rate {learning_rate} {line_break}
+  --cache_text_encoder_outputs {line_break}
+  --cache_text_encoder_outputs_to_disk {line_break}
+  --max_train_epochs {max_train_epochs} {line_break}
+  --save_every_n_epochs {save_every_n_epochs} {line_break}
+  --dataset_config {resolve_path(f"outputs/{output_name}/dataset.toml")} {line_break}
+  --output_dir {output_dir} {line_break}
+  --output_name {output_name} {line_break}
+  --guidance_scale {guidance_scale} {line_break}
+  --min_timestep 0 {line_break}
+  --max_timestep 1000 {line_break}"""
     else:
-        model_folder = f"models/unet/{repo}"
-    model_path = os.path.join(model_folder, model_file)
-    pretrained_model_path = resolve_path(model_path)
+        # SD 1.5 training command
+        if base_model == "flux-dev" or base_model == "flux-schnell":
+            model_folder = "models/unet"
+        else:
+            model_folder = f"models/unet/{repo}"
+        model_path = os.path.join(model_folder, model_file)
+        pretrained_model_path = resolve_path(model_path)
+        clip_path = resolve_path("models/clip/clip_l.safetensors")
+        t5_path = resolve_path("models/clip/t5xxl_fp16.safetensors")
+        ae_path = resolve_path("models/vae/ae.sft")
 
-    clip_path = resolve_path("models/clip/clip_l.safetensors")
-    t5_path = resolve_path("models/clip/t5xxl_fp16.safetensors")
-    ae_path = resolve_path("models/vae/ae.sft")
-    sh = f"""accelerate launch {line_break}
+        sh = f"""accelerate launch {line_break}
   --mixed_precision bf16 {line_break}
   --num_cpu_threads_per_process 1 {line_break}
   sd-scripts/flux_train_network.py {line_break}
@@ -484,25 +548,17 @@ def gen_sh(
   --model_prediction_type raw {line_break}
   --guidance_scale {guidance_scale} {line_break}
   --loss_type l2 {line_break}"""
-   
 
-
-    ############# Advanced args ########################
+    # Advanced args
     global advanced_component_ids
     global original_advanced_component_values
-   
-    # check dirty
-    print(f"original_advanced_component_values = {original_advanced_component_values}")
+    
     advanced_flags = []
     for i, current_value in enumerate(advanced_components):
-#        print(f"compare {advanced_component_ids[i]}: old={original_advanced_component_values[i]}, new={current_value}")
         if original_advanced_component_values[i] != current_value:
-            # dirty
             if current_value == True:
-                # Boolean
                 advanced_flags.append(advanced_component_ids[i])
             else:
-                # string
                 advanced_flags.append(f"{advanced_component_ids[i]} {current_value}")
 
     if len(advanced_flags) > 0:
@@ -637,7 +693,6 @@ def start_training(
         f.write(md)
 
     gr.Info(f"Training Complete. Check the outputs folder for the LoRA files.", duration=None)
-
 
 def update(
     base_model,
@@ -801,6 +856,28 @@ def init_advanced():
             advanced_component_ids.append(component.elem_id)
     return advanced_components, advanced_component_ids
 
+def get_prompt_files():
+    """Retrieve a list of YAML prompt files from the specified folder."""
+    return [f for f in os.listdir(PROMPT_FOLDER) if f.endswith('.yaml')]
+
+def update_prompt(selected_name, prompts):
+    """Return the prompt text for the selected name."""
+    if selected_name in prompts:
+        prompt_text = prompts[selected_name]
+        print(f"Selected prompt: {prompt_text}")
+        return prompt_text
+    else:
+        print(f"Selected prompt not found: {selected_name}")
+        return ""
+
+def load_prompts():
+    """Load prompts from YAML files and return a dictionary of name: prompt."""
+    prompts = {}
+    for file_name in get_prompt_files():
+        with open(os.path.join(PROMPT_FOLDER, file_name), 'r') as file:
+            data = yaml.safe_load(file)
+            prompts[data['name']] = data['prompt']
+    return prompts
 
 theme = gr.themes.Monochrome(
     text_size=gr.themes.Size(lg="18px", md="15px", sm="13px", xl="22px", xs="12px", xxl="24px", xxs="9px"),
@@ -889,6 +966,11 @@ function() {
 
 current_account = account_hf()
 print(f"current_account={current_account}")
+# Load all prompts
+prompts = load_prompts()
+prompt_names = list(prompts.keys())
+prompt_placeholder = "Select a pre-defined system prompt"
+prompt_names.insert(0, prompt_placeholder)
 
 with gr.Blocks(elem_id="app", theme=theme, css=css, fill_width=True) as demo:
     with gr.Tabs() as tabs:
@@ -945,9 +1027,33 @@ with gr.Blocks(elem_id="app", theme=theme, css=css, fill_width=True) as demo:
                             scale=1,
                         )
                     with gr.Group(visible=False) as captioning_area:
-                        do_captioning = gr.Button("Add AI captions with Florence-2")
+                        with gr.Row():
+                            # Existing button
+                            do_captioning = gr.Button("Add AI captions with Florence-2")
+
+                            # New button for OpenAI
+                            add_openai_caption_button = gr.Button("Add AI Caption with OpenAI")
                         output_components.append(captioning_area)
-                        #output_components = [captioning_area]
+                        
+                        # Dropdown for selecting a system prompt
+                        prompt_dropdown = gr.Dropdown(
+                            label="Select System Prompt",
+                            choices=prompt_names,
+                            value=prompt_placeholder,
+                        )
+                        # Add a text input section for additional notes or modifications
+                        additional_notes = gr.Textbox(
+                            label="System prompt for OpenAI",
+                            placeholder="Enter any additional notes or modifications here...",
+                            lines=3
+                        )
+                        # Update the textbox when a new prompt is selected
+                        prompt_dropdown.change(
+                            fn=update_prompt,
+                            inputs=[prompt_dropdown, gr.State(prompts)],
+                            outputs=additional_notes
+                        )
+
                         caption_list = []
                         for i in range(1, MAX_IMAGES + 1):
                             locals()[f"captioning_row_{i}"] = gr.Row(visible=False)
@@ -1099,6 +1205,7 @@ with gr.Blocks(elem_id="app", theme=theme, css=css, fill_width=True) as demo:
         inputs=[max_train_epochs, num_repeats, images],
         outputs=[total_steps]
     )
+
     concept_sentence.change(fn=update_sample, inputs=[concept_sentence], outputs=sample_prompts)
     start.click(fn=create_dataset, inputs=[dataset_folder, resolution, images] + caption_list, outputs=dataset_folder).then(
         fn=start_training,
@@ -1112,8 +1219,14 @@ with gr.Blocks(elem_id="app", theme=theme, css=css, fill_width=True) as demo:
         outputs=terminal,
     )
     do_captioning.click(fn=run_captioning, inputs=[images, concept_sentence] + caption_list, outputs=caption_list)
+    add_openai_caption_button.click(
+            fn=run_captioning_openai,
+            inputs=[images, concept_sentence, additional_notes,  *caption_list],
+            outputs=caption_list
+        )
     demo.load(fn=loaded, js=js, outputs=[hf_token, hf_login, hf_logout, repo_owner])
     refresh.click(update, inputs=listeners, outputs=[train_script, train_config, dataset_folder])
+
 if __name__ == "__main__":
     cwd = os.path.dirname(os.path.abspath(__file__))
     demo.launch(debug=True, show_error=True, allowed_paths=[cwd])
