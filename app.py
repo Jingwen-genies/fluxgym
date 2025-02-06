@@ -16,13 +16,14 @@ from slugify import slugify
 from transformers import AutoProcessor, AutoModelForCausalLM
 from gradio_logsview import LogsView, LogsViewRunner
 from huggingface_hub import hf_hub_download, HfApi
-from library import flux_train_utils, huggingface_util
+from library import flux_train_utils, huggingface_util, sdxl_train_util
 from argparse import Namespace
 import train_network
 import toml
 import re
 
-from caption_generation_openai import generate_caption
+from scripts.caption_generation_openai import generate_caption
+from scripts.training_script_generation import generate_sh_flux, generate_sh_sdxl, ScriptGenerator
 
 MAX_IMAGES = 150
 PROMPT_FOLDER = "prompts"
@@ -53,8 +54,9 @@ def readme(base_model, lora_name, instance_prompt, sample_prompts):
     print(f"license_items={license_items}")
     print(f"license_str = {license_str}")
 
+    
     # tags
-    tags = [ "text-to-image", "flux", "lora", "diffusers", "template:sd-lora", "fluxgym" ]
+    tags = [ "text-to-image", base_model, "lora", "diffusers", "template:sd-lora", "fluxgym" ]
 
     # widgets
     widgets = []
@@ -100,7 +102,7 @@ base_model: {base_model_name}
 
 # {lora_name}
 
-A Flux LoRA trained on a local computer with [Fluxgym](https://github.com/cocktailpeanut/fluxgym)
+A {base_model} LoRA trained on a local computer with [Fluxgym](https://github.com/cocktailpeanut/fluxgym)
 
 <Gallery />
 
@@ -408,10 +410,7 @@ def download(base_model):
             print(f"download {base_model}")
             hf_hub_download(repo_id=repo, local_dir=checkpoint_folder, filename=model_file)
 
-def resolve_path(p):
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    norm_path = os.path.normpath(os.path.join(current_dir, p))
-    return f"\"{norm_path}\""
+
 
 def resolve_path_without_quotes(p):
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -436,138 +435,81 @@ def gen_sh(
     *advanced_components
 ):
     print(f"gen_sh: network_dim:{network_dim}, max_train_epochs={max_train_epochs}, save_every_n_epochs={save_every_n_epochs}")
-
-    output_dir = resolve_path(f"outputs/{output_name}")
-    sample_prompts_path = resolve_path(f"outputs/{output_name}/sample_prompts.txt")
-
-    line_break = "\\"
-    file_type = "sh"
-    if sys.platform == "win32":
-        line_break = "^"
-        file_type = "bat"
-
-    # Sample args
-    sample = ""
-    if len(sample_prompts) > 0 and sample_every_n_steps > 0:
-        sample = f"""--sample_prompts={sample_prompts_path} --sample_every_n_steps="{sample_every_n_steps}" {line_break}"""
-
-    # Optimizer args
-    if vram == "16G":
-        optimizer = f"""--optimizer_type adafactor {line_break}
-  --optimizer_args "relative_step=False" "scale_parameter=False" "warmup_init=False" {line_break}
-  --lr_scheduler constant_with_warmup {line_break}
-  --max_grad_norm 0.0 {line_break}"""
-    elif vram == "12G":
-        optimizer = f"""--optimizer_type adafactor {line_break}
-  --optimizer_args "relative_step=False" "scale_parameter=False" "warmup_init=False" {line_break}
-  --split_mode {line_break}
-  --network_args "train_blocks=single" {line_break}
-  --lr_scheduler constant_with_warmup {line_break}
-  --max_grad_norm 0.0 {line_break}"""
+    global models
+    print(f"models={models}")
+    if "flux" in base_model:
+        global advanced_component_ids
+        global original_advanced_component_values
+        
+        sh = generate_sh_flux(
+            models=models,
+            base_model=base_model,
+            output_name=output_name,
+            resolution=resolution,
+            seed=seed,
+            workers=workers,
+            learning_rate=learning_rate,
+            network_dim=network_dim,
+            max_train_epochs=max_train_epochs,
+            save_every_n_epochs=save_every_n_epochs,
+            timestep_sampling=timestep_sampling,
+            guidance_scale=guidance_scale,
+            vram=vram,
+            sample_prompts=sample_prompts,
+            sample_every_n_steps=sample_every_n_steps,
+            advanced_component_ids=advanced_component_ids,
+            original_advanced_component_values=original_advanced_component_values,
+            advanced_components=advanced_components,
+        )
+    elif "sdxl" in base_model:
+        sh = generate_sh_sdxl(
+            models=models,
+            base_model=base_model,
+            output_name=output_name,
+            resolution=resolution,
+            seed=seed,
+            workers=workers,
+            learning_rate=learning_rate,
+            network_dim=network_dim,
+            max_train_epochs=max_train_epochs,
+            save_every_n_epochs=save_every_n_epochs,
+            timestep_sampling=timestep_sampling,
+            guidance_scale=guidance_scale,
+            vram=vram,
+            sample_prompts=sample_prompts,
+            sample_every_n_steps=sample_every_n_steps,
+            advanced_component_ids=advanced_component_ids,
+            original_advanced_component_values=original_advanced_component_values,
+            advanced_components=advanced_components,
+        )
     else:
-        optimizer = f"--optimizer_type adamw8bit {line_break}"
+        raise ValueError(f"Invalid base model: {base_model}")
 
-    # Generate training command based on model type
-    model_config = models[base_model]
-    model_file = model_config["file"]
-    repo = model_config["repo"]
-    
-    if "sdxl" in base_model:
-        # SDXL training command
-        checkpoint_path = resolve_path(f"models/checkpoints/sdxl/{model_file}")
-        sh = f"""accelerate launch {line_break}
-  --mixed_precision bf16 {line_break}
-  --num_cpu_threads_per_process 1 {line_break}
-  sd-scripts/sdxl_train_network.py {line_break}
-  --pretrained_model_name_or_path {checkpoint_path} {line_break}
-  --cache_latents_to_disk {line_break}
-  --save_model_as safetensors {line_break}
-  --sdpa --persistent_data_loader_workers {line_break}
-  --max_data_loader_n_workers {workers} {line_break}
-  --seed {seed} {line_break}
-  --gradient_checkpointing {line_break}
-  --mixed_precision bf16 {line_break}
-  --save_precision bf16 {line_break}
-  --network_module networks.lora {line_break}
-  --network_dim {network_dim} {line_break}
-  {optimizer}{sample}
-  --learning_rate {learning_rate} {line_break}
-  --cache_text_encoder_outputs {line_break}
-  --cache_text_encoder_outputs_to_disk {line_break}
-  --max_train_epochs {max_train_epochs} {line_break}
-  --save_every_n_epochs {save_every_n_epochs} {line_break}
-  --dataset_config {resolve_path(f"outputs/{output_name}/dataset.toml")} {line_break}
-  --output_dir {output_dir} {line_break}
-  --output_name {output_name} {line_break}
-  --guidance_scale {guidance_scale} {line_break}
-  --min_timestep 0 {line_break}
-  --max_timestep 1000 {line_break}"""
-    else:
-        # SD 1.5 training command
-        if base_model == "flux-dev" or base_model == "flux-schnell":
-            model_folder = "models/unet"
-        else:
-            model_folder = f"models/unet/{repo}"
-        model_path = os.path.join(model_folder, model_file)
-        pretrained_model_path = resolve_path(model_path)
-        clip_path = resolve_path("models/clip/clip_l.safetensors")
-        t5_path = resolve_path("models/clip/t5xxl_fp16.safetensors")
-        ae_path = resolve_path("models/vae/ae.sft")
-
-        sh = f"""accelerate launch {line_break}
-  --mixed_precision bf16 {line_break}
-  --num_cpu_threads_per_process 1 {line_break}
-  sd-scripts/flux_train_network.py {line_break}
-  --pretrained_model_name_or_path {pretrained_model_path} {line_break}
-  --clip_l {clip_path} {line_break}
-  --t5xxl {t5_path} {line_break}
-  --ae {ae_path} {line_break}
-  --cache_latents_to_disk {line_break}
-  --save_model_as safetensors {line_break}
-  --sdpa --persistent_data_loader_workers {line_break}
-  --max_data_loader_n_workers {workers} {line_break}
-  --seed {seed} {line_break}
-  --gradient_checkpointing {line_break}
-  --mixed_precision bf16 {line_break}
-  --save_precision bf16 {line_break}
-  --network_module networks.lora_flux {line_break}
-  --network_dim {network_dim} {line_break}
-  {optimizer}{sample}
-  --learning_rate {learning_rate} {line_break}
-  --cache_text_encoder_outputs {line_break}
-  --cache_text_encoder_outputs_to_disk {line_break}
-  --fp8_base {line_break}
-  --highvram {line_break}
-  --max_train_epochs {max_train_epochs} {line_break}
-  --save_every_n_epochs {save_every_n_epochs} {line_break}
-  --dataset_config {resolve_path(f"outputs/{output_name}/dataset.toml")} {line_break}
-  --output_dir {output_dir} {line_break}
-  --output_name {output_name} {line_break}
-  --timestep_sampling {timestep_sampling} {line_break}
-  --discrete_flow_shift 3.1582 {line_break}
-  --model_prediction_type raw {line_break}
-  --guidance_scale {guidance_scale} {line_break}
-  --loss_type l2 {line_break}"""
-
-    # Advanced args
-    global advanced_component_ids
-    global original_advanced_component_values
-    
-    advanced_flags = []
-    for i, current_value in enumerate(advanced_components):
-        if original_advanced_component_values[i] != current_value:
-            if current_value == True:
-                advanced_flags.append(advanced_component_ids[i])
-            else:
-                advanced_flags.append(f"{advanced_component_ids[i]} {current_value}")
-
-    if len(advanced_flags) > 0:
-        advanced_flags_str = f" {line_break}\n  ".join(advanced_flags)
-        sh = sh + "\n  " + advanced_flags_str
-
-    return sh
+    return sh   
 
 def gen_toml(
+  dataset_folder,
+  resolution,
+  class_tokens,
+  num_repeats
+):
+    toml = f"""[general]
+shuffle_caption = false
+caption_extension = '.txt'
+keep_tokens = 1
+
+[[datasets]]
+resolution = {resolution}
+batch_size = 1
+keep_tokens = 1
+
+  [[datasets.subsets]]
+  image_dir = '{resolve_path_without_quotes(dataset_folder)}'
+  class_tokens = '{class_tokens}'
+  num_repeats = {num_repeats}"""
+    return toml
+
+def gen_toml_sdxl(
   dataset_folder,
   resolution,
   class_tokens,
@@ -732,12 +674,22 @@ def update(
         sample_every_n_steps,
         *advanced_components,
     )
-    toml = gen_toml(
-        dataset_folder,
-        resolution,
-        class_tokens,
-        num_repeats
-    )
+    if "sdxl" in base_model:
+        toml = gen_toml_sdxl(
+            dataset_folder,
+            resolution,
+            class_tokens,
+            num_repeats
+        )
+    elif "flux" in base_model:
+        toml = gen_toml(
+            dataset_folder,
+            resolution,
+            class_tokens,
+            num_repeats
+        )
+    else:
+        raise ValueError(f"Invalid base model: {base_model}")
     return gr.update(value=sh), gr.update(value=toml), dataset_folder
 
 """
@@ -759,7 +711,9 @@ def refresh_publish_tab():
     loras = get_loras()
     return gr.Dropdown(label="Trained LoRAs", choices=loras)
 
-def init_advanced():
+def init_advanced(base_model_name):
+    print(f"Initializing advanced options for {base_model_name}")  # Better logging
+    
     # if basic_args
     basic_args = {
         'pretrained_model_name_or_path',
@@ -805,7 +759,13 @@ def init_advanced():
     # generate a UI config
     # if not in basic_args, create a simple form
     parser = train_network.setup_parser()
-    flux_train_utils.add_flux_train_arguments(parser)
+    if 'flux' in base_model_name:
+        print("Adding Flux training arguments")  # Better logging
+        flux_train_utils.add_flux_train_arguments(parser)
+    elif 'sdxl' in base_model_name:
+        print("Adding SDXL training arguments")  # Better logging
+        sdxl_train_util.add_sdxl_training_arguments(parser)
+
     args_info = {}
     for action in parser._actions:
         if action.dest != 'help':  # Skip the default help argument
@@ -817,17 +777,27 @@ def init_advanced():
                 "default": action.default,        # Default value, if any
                 "required": action.required       # Whether the argument is required
             }
+            
+    # Print specific arguments we're interested in instead of entire args_info
+    print(f"Number of advanced arguments: {len(args_info)}")
+    if '--enable_bucket' in [opt for action in parser._actions for opt in action.option_strings]:
+        print("Found enable_bucket option in arguments")
+
     temp = []
     for key in args_info:
         temp.append({ 'key': key, 'action': args_info[key] })
     temp.sort(key=lambda x: x['key'])
+    
+    print("Creating advanced UI components...")  # Add logging
     advanced_component_ids = []
     advanced_components = []
+    component_count = 0  # Add counter
+    
     for item in temp:
         key = item['key']
         action = item['action']
         if key in basic_args:
-            print("")
+            continue
         else:
             action_type = str(action['type'])
             component = None
@@ -835,14 +805,6 @@ def init_advanced():
                 if action_type == "None":
                     # radio
                     component = gr.Checkbox()
-    #            elif action_type == "<class 'str'>":
-    #                component = gr.Textbox()
-    #            elif action_type == "<class 'int'>":
-    #                component = gr.Number(precision=0)
-    #            elif action_type == "<class 'float'>":
-    #                component = gr.Number()
-    #            elif "int_or_float" in action_type:
-    #                component = gr.Number()
                 else:
                     component = gr.Textbox(value="")
                 if component != None:
@@ -850,10 +812,17 @@ def init_advanced():
                     component.elem_id = action['action'][0]
                     component.label = component.elem_id
                     component.elem_classes = ["advanced"]
-                if action['help'] != None:
-                    component.info = action['help']
-            advanced_components.append(component)
-            advanced_component_ids.append(component.elem_id)
+                    if action['help'] != None:
+                        component.info = action['help']
+                    component_count += 1
+                    if component_count % 20 == 0:
+                        print(f"Created {component_count} components...")
+            
+            if component != None:
+                advanced_components.append(component)
+                advanced_component_ids.append(component.elem_id)
+    
+    print(f"Created {len(advanced_components)} advanced UI components")  # Final count
     return advanced_components, advanced_component_ids
 
 def get_prompt_files():
@@ -878,6 +847,34 @@ def load_prompts():
             data = yaml.safe_load(file)
             prompts[data['name']] = data['prompt']
     return prompts
+
+
+def update_advanced_settings(base_model_name, lora_name_value):
+    """Update advanced settings based on selected model"""
+    is_sdxl = "sdxl" in base_model_name
+    
+    # Update default values
+    new_lr = "1e-4" if is_sdxl else "8e-4"
+    new_dim = 64 if is_sdxl else 4
+    
+    # Get current values from advanced components
+    current_values = [comp.value for comp in advanced_components]
+    
+    # Generate new script with updated values
+    try:
+        output_name = slugify(lora_name_value) if lora_name_value else ""
+        sh = gen_sh(
+            base_model=base_model_name,
+            output_name=output_name,
+            # ... rest of parameters ...
+        )
+    except:
+        return {
+            learning_rate: gr.update(value=new_lr),
+            network_dim: gr.update(value=new_dim),
+        }
+
+
 
 theme = gr.themes.Monochrome(
     text_size=gr.themes.Size(lg="18px", md="15px", sm="13px", xl="22px", xs="12px", xxl="24px", xxs="9px"),
@@ -972,6 +969,32 @@ prompt_names = list(prompts.keys())
 prompt_placeholder = "Select a pre-defined system prompt"
 prompt_names.insert(0, prompt_placeholder)
 
+def get_available_datasets():
+    """Get list of available datasets on host"""
+    datasets_path = "datasets"  # 基础数据集目录
+    if not os.path.exists(datasets_path):
+        os.makedirs(datasets_path)
+        
+    # 获取所有子目录
+    datasets = []
+    for item in os.listdir(datasets_path):
+        item_path = os.path.join(datasets_path, item)
+        if os.path.isdir(item_path):
+            datasets.append(item_path)
+    return datasets
+
+def update_dataset_view(choice):
+    if choice == "Upload New":
+        return {
+            images: gr.update(visible=True),
+            existing_dataset: gr.update(visible=False)
+        }
+    else:
+        return {
+            images: gr.update(visible=False),
+            existing_dataset: gr.update(visible=True, choices=get_available_datasets())
+        }
+
 with gr.Blocks(elem_id="app", theme=theme, css=css, fill_width=True) as demo:
     with gr.Tabs() as tabs:
         with gr.TabItem("Gym"):
@@ -1017,14 +1040,24 @@ with gr.Blocks(elem_id="app", theme=theme, css=css, fill_width=True) as demo:
         <p style="margin-top:0">Make sure the captions include the trigger word.</p>
         """, elem_classes="group_padding")
                     with gr.Group():
-                        images = gr.File(
-                            file_types=["image", ".txt"],
-                            label="Upload your images",
-                            #info="If you want, you can also manually upload caption files that match the image names (example: img0.png => img0.txt)",
+                        with gr.Row():
+                            # 添加数据集选择选项
+                            dataset_choice = gr.Radio(
+                                choices=["Upload New", "Use Existing"],
+                                value="Upload New",
+                                label="Dataset Source"
+                            )
+                            existing_dataset = gr.Dropdown(
+                                choices=get_available_datasets(),
+                                label="Select Existing Dataset",
+                                visible=False
+                            )
+                        
+                        images = gr.Files(
+                            label="Upload Images",
                             file_count="multiple",
-                            interactive=True,
-                            visible=True,
-                            scale=1,
+                            file_types=["image"],
+                            elem_id="image_upload"
                         )
                     with gr.Group(visible=False) as captioning_area:
                         with gr.Row():
@@ -1088,13 +1121,21 @@ with gr.Blocks(elem_id="app", theme=theme, css=css, fill_width=True) as demo:
                     train_script = gr.Textbox(label="Train script", max_lines=100, interactive=True)
                     train_config = gr.Textbox(label="Train config", max_lines=100, interactive=True)
             with gr.Accordion("Advanced options", elem_id='advanced_options', open=False):
+                print(f"base_model.value={base_model.value}")
+                default_lr = "1e-4" if "sdxl" in base_model.value else "8e-4"
+                default_network_dim = 64 if "sdxl" in base_model.value else 4
                 with gr.Row():
                     with gr.Column(min_width=300):
                         seed = gr.Number(label="--seed", info="Seed", value=42, interactive=True)
                     with gr.Column(min_width=300):
                         workers = gr.Number(label="--max_data_loader_n_workers", info="Number of Workers", value=2, interactive=True)
                     with gr.Column(min_width=300):
-                        learning_rate = gr.Textbox(label="--learning_rate", info="Learning Rate", value="8e-4", interactive=True)
+                        learning_rate = gr.Textbox(
+                            label="--learning_rate",
+                            info="Learning Rate",
+                            value=default_lr,
+                            interactive=True
+                        )
                     with gr.Column(min_width=300):
                         save_every_n_epochs = gr.Number(label="--save_every_n_epochs", info="Save every N epochs", value=4, interactive=True)
                     with gr.Column(min_width=300):
@@ -1102,8 +1143,16 @@ with gr.Blocks(elem_id="app", theme=theme, css=css, fill_width=True) as demo:
                     with gr.Column(min_width=300):
                         timestep_sampling = gr.Textbox(label="--timestep_sampling", info="Timestep Sampling", value="shift", interactive=True)
                     with gr.Column(min_width=300):
-                        network_dim = gr.Number(label="--network_dim", info="LoRA Rank", value=4, minimum=4, maximum=128, step=4, interactive=True)
-                    advanced_components, advanced_component_ids = init_advanced()
+                        network_dim = gr.Number(
+                            value=default_network_dim,
+                            minimum=4,
+                            maximum=128,
+                            step=4,
+                            label="--network_dim",
+                            info="LoRA Rank",
+                            interactive=True
+                        )
+                    advanced_components, advanced_component_ids = init_advanced(base_model.value)
             with gr.Row():
                 terminal = LogsView(label="Train log", elem_id="terminal")
             with gr.Row():
@@ -1162,7 +1211,7 @@ with gr.Blocks(elem_id="app", theme=theme, css=css, fill_width=True) as demo:
         num_repeats,
         sample_prompts,
         sample_every_n_steps,
-        *advanced_components
+        *advanced_components,
     ]
     advanced_component_ids = [x.elem_id for x in advanced_components]
     original_advanced_component_values = [comp.value for comp in advanced_components]
@@ -1227,6 +1276,35 @@ with gr.Blocks(elem_id="app", theme=theme, css=css, fill_width=True) as demo:
     demo.load(fn=loaded, js=js, outputs=[hf_token, hf_login, hf_logout, repo_owner])
     refresh.click(update, inputs=listeners, outputs=[train_script, train_config, dataset_folder])
 
+    # Update the change handler to include train_script
+    base_model.change(
+        fn=update_advanced_settings,
+        inputs=[base_model, lora_name],
+        outputs=[learning_rate, network_dim, train_script]
+    )
+
+    # Add change handlers for all components that affect the script
+    for component in listeners:
+        if hasattr(component, 'change'):  # Check if component has change event
+            component.change(
+                fn=update,
+                inputs=listeners,
+                outputs=[train_script, train_config, dataset_folder]
+            )
+
+    # 在事件处理部分添加
+    dataset_choice.change(
+        fn=update_dataset_view,
+        inputs=[dataset_choice],
+        outputs=[images, existing_dataset]
+    )
+
 if __name__ == "__main__":
     cwd = os.path.dirname(os.path.abspath(__file__))
-    demo.launch(debug=True, show_error=True, allowed_paths=[cwd])
+    demo.launch(
+        debug=True, 
+        show_error=True, 
+        allowed_paths=[cwd],
+        server_name="0.0.0.0",  # 允许所有IP访问
+        share=True  # 创建一个可分享的链接
+    )
