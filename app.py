@@ -491,44 +491,51 @@ def gen_toml(
   dataset_folder,
   resolution,
   class_tokens,
-  num_repeats
+  num_repeats,
+  batch_size
 ):
     toml = f"""[general]
-shuffle_caption = false
-caption_extension = '.txt'
-keep_tokens = 1
+    enable_bucket = true          
+    bucket_no_upscale = true  
+    shuffle_caption = false
+    caption_extension = '.txt'
+    keep_tokens = 1
 
-[[datasets]]
-resolution = {resolution}
-batch_size = 1
-keep_tokens = 1
+    [[datasets]]
+    resolution = {resolution}
+    batch_size = {batch_size}
+    keep_tokens = 1
 
-  [[datasets.subsets]]
-  image_dir = '{resolve_path_without_quotes(dataset_folder)}'
-  class_tokens = '{class_tokens}'
-  num_repeats = {num_repeats}"""
+    [[datasets.subsets]]
+    image_dir = '{resolve_path_without_quotes(dataset_folder)}'
+    class_tokens = '{class_tokens}'
+    num_repeats = {num_repeats}"""
     return toml
 
 def gen_toml_sdxl(
-  dataset_folder,
-  resolution,
-  class_tokens,
-  num_repeats
+    dataset_folder,
+    resolution,
+    class_tokens,
+    num_repeats,
+    batch_size
 ):
     toml = f"""[general]
-shuffle_caption = false
-caption_extension = '.txt'
-keep_tokens = 1
+    enable_bucket = true          
+    bucket_no_upscale = true     
+    shuffle_caption = false
+    caption_extension = '.txt'
+    keep_tokens = 1
 
-[[datasets]]
-resolution = {resolution}
-batch_size = 1
-keep_tokens = 1
+    [[datasets]]
+    resolution = {resolution}
+    batch_size = {batch_size}
 
-  [[datasets.subsets]]
-  image_dir = '{resolve_path_without_quotes(dataset_folder)}'
-  class_tokens = '{class_tokens}'
-  num_repeats = {num_repeats}"""
+    [[datasets.subsets]]
+    image_dir = '{resolve_path_without_quotes(dataset_folder)}'
+    class_tokens = '{class_tokens}'
+    num_repeats = {num_repeats}
+    keep_tokens = 1
+    """
     return toml
 
 def update_total_steps(max_train_epochs, num_repeats, images):
@@ -653,6 +660,7 @@ def update(
     num_repeats,
     sample_prompts,
     sample_every_n_steps,
+    batch_size,
     *advanced_components,
 ):
     output_name = slugify(lora_name)
@@ -679,14 +687,16 @@ def update(
             dataset_folder,
             resolution,
             class_tokens,
-            num_repeats
+            num_repeats,
+            batch_size
         )
     elif "flux" in base_model:
         toml = gen_toml(
             dataset_folder,
             resolution,
             class_tokens,
-            num_repeats
+            num_repeats,
+            batch_size
         )
     else:
         raise ValueError(f"Invalid base model: {base_model}")
@@ -970,12 +980,12 @@ prompt_placeholder = "Select a pre-defined system prompt"
 prompt_names.insert(0, prompt_placeholder)
 
 def get_available_datasets():
-    """Get list of available datasets on host"""
-    datasets_path = "datasets"  # 基础数据集目录
+    """Get list of available datasets from host machine"""
+    datasets_path = "datasets"  # Base dataset directory
     if not os.path.exists(datasets_path):
         os.makedirs(datasets_path)
         
-    # 获取所有子目录
+    # Get all subdirectories
     datasets = []
     for item in os.listdir(datasets_path):
         item_path = os.path.join(datasets_path, item)
@@ -983,15 +993,32 @@ def get_available_datasets():
             datasets.append(item_path)
     return datasets
 
-def update_dataset_view(choice):
+def load_dataset_images(dataset_path):
+    """Load images and captions from existing dataset path"""
+    if not dataset_path:
+        return None
+        
+    files = []
+    # Get all image and txt files from the directory
+    for file in os.listdir(dataset_path):
+        file_path = os.path.join(dataset_path, file)
+        if file.lower().endswith(('.png', '.jpg', '.jpeg', '.webp', '.txt')):
+            files.append(file_path)
+            
+    return files
+
+def update_dataset_view(choice, existing_path=None):
+    """Update UI based on dataset choice"""
     if choice == "Upload New":
         return {
-            images: gr.update(visible=True),
+            images: gr.update(visible=True, value=None),
             existing_dataset: gr.update(visible=False)
         }
     else:
+        # If using existing dataset, load all files and pass to load_captioning
+        loaded_files = load_dataset_images(existing_path) if existing_path else None
         return {
-            images: gr.update(visible=False),
+            images: gr.update(visible=True, value=loaded_files),
             existing_dataset: gr.update(visible=True, choices=get_available_datasets())
         }
 
@@ -1028,6 +1055,7 @@ with gr.Blocks(elem_id="app", theme=theme, css=css, fill_width=True) as demo:
                     print(f"model_names={model_names}")
                     base_model = gr.Dropdown(label="Base model (edit the models.yaml file to add more to this list)", choices=model_names, value=model_names[0])
                     vram = gr.Radio(["20G", "16G", "12G" ], value="20G", label="VRAM", interactive=True)
+                    batch_size = gr.Number(value=1, precision=0, label="Batch Size", interactive=True)
                     num_repeats = gr.Number(value=10, precision=0, label="Repeat trains per image", interactive=True)
                     max_train_epochs = gr.Number(label="Max Train Epochs", value=16, interactive=True)
                     total_steps = gr.Number(0, interactive=False, label="Expected training steps")
@@ -1211,6 +1239,7 @@ with gr.Blocks(elem_id="app", theme=theme, css=css, fill_width=True) as demo:
         num_repeats,
         sample_prompts,
         sample_every_n_steps,
+        batch_size,
         *advanced_components,
     ]
     advanced_component_ids = [x.elem_id for x in advanced_components]
@@ -1299,12 +1328,18 @@ with gr.Blocks(elem_id="app", theme=theme, css=css, fill_width=True) as demo:
         outputs=[images, existing_dataset]
     )
 
+    existing_dataset.change(
+        fn=update_dataset_view,
+        inputs=[dataset_choice, existing_dataset],
+        outputs=[images, existing_dataset]
+    )
+
 if __name__ == "__main__":
     cwd = os.path.dirname(os.path.abspath(__file__))
     demo.launch(
         debug=True, 
         show_error=True, 
         allowed_paths=[cwd],
-        server_name="0.0.0.0",  # 允许所有IP访问
-        share=True  # 创建一个可分享的链接
+        server_name="0.0.0.0",  # 
+        share=False,  #
     )

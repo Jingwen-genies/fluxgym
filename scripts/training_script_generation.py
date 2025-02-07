@@ -20,10 +20,13 @@ class ScriptGenerator:
         self.line_break = "\\"
     def _get_base_command(self, base_model: str) -> str:
         """Generate base command based on model type"""
+        base_cmd = "accelerate launch --mixed_precision fp16 --num_cpu_threads_per_process=2 "
         if "flux" in base_model:
-            return "accelerate launch --num_cpu_threads_per_process=2 train_network.py"
+            paths = self._get_model_paths(base_model)
+            return base_cmd + f"sd-scripts/flux_train_network.py --unet {paths['unet']} --clip_l {paths['clip']} --t5xxl {paths['t5xxl']} --ae {paths['vae']}"
         elif "sdxl" in base_model:
-            return "accelerate launch --num_cpu_threads_per_process=2 sdxl_train_network.py"
+            paths = self._get_model_paths(base_model)
+            return base_cmd + f"sd-scripts/sdxl_train_network.py --pretrained_model_name_or_path {paths['pretrained']}"
         else:
             raise ValueError(f"Unsupported model type: {base_model}")
 
@@ -46,8 +49,13 @@ class ScriptGenerator:
 
     def _format_basic_args(self, base_model, **kwargs) -> str:
         """Format basic training arguments with model-specific defaults"""
+        output_name = kwargs['output_name']
+        data_config_path = resolve_path(f'outputs/{output_name}/dataset.toml')
+        output_dir = resolve_path(f'outputs/{output_name}')
+        
         args = [
-            f"--output_name {kwargs['output_name']}",
+            f"--output_name {output_name}",
+            f"--output_dir {output_dir}",
             f"--resolution {kwargs['resolution']}",
             f"--seed {kwargs['seed']}",
             f"--max_data_loader_n_workers {kwargs['workers']}",
@@ -55,18 +63,20 @@ class ScriptGenerator:
             f"--network_dim {kwargs['network_dim']}",
             f"--max_train_epochs {kwargs['max_train_epochs']}",
             f"--save_every_n_epochs {kwargs['save_every_n_epochs']}",
-            f"--timestep_sampling {kwargs['timestep_sampling']}",
-            f"--guidance_scale {kwargs['guidance_scale']}",
+            f"--dataset_config {data_config_path}",
             "--enable_bucket",
-            "--min_bucket_reso 128",
+            "--min_bucket_reso 64",
             "--max_bucket_reso 2048",
+            "--bucket_reso_steps 64",
+
         ]
 
         # Add model-specific arguments
         if "flux" in base_model:
             args.extend([
-                "--mixed_precision bf16",
-                "--save_precision bf16",
+                f"--timestep_sampling {kwargs['timestep_sampling']}",
+                f"--guidance_scale {kwargs['guidance_scale']}",
+                "--save_precision fp16",
                 "--network_module networks.lora_flux",
                 "--cache_latents_to_disk",
                 "--save_model_as safetensors",
@@ -102,57 +112,41 @@ class ScriptGenerator:
                 args.append("--optimizer_type adamw8bit")
         elif "sdxl" in base_model:
             args.extend([
-                "--mixed_precision bf16",
-                "--save_precision bf16",
+                "--save_precision fp16",
                 "--network_module networks.lora",
                 "--gradient_accumulation_steps 1",
-                "--text_encoder_lr 1e-4",
-                "--unet_lr 1e-4",
-                "--network_alpha 16",
+                f"--text_encoder_lr {kwargs['learning_rate']}",
+                f"--unet_lr {kwargs['learning_rate']}",
+                "--network_alpha 128",
                 "--loss_type l2",
                 "--gradient_checkpointing",
                 "--bucket_no_upscale",
-                "--bucket_reso_steps 32",
-                "--min_bucket_reso 64",
-                "--max_bucket_reso 2048",
                 "--cache_latents",
                 "--cache_latents_to_disk",
                 "--no_half_vae",
-                "--network_args",
                 "--persistent_data_loader_workers",
-                "--clip_skip 1",
-                "--max_token_length 75",
+                "--max_token_length 150",
                 "--save_model_as safetensors",
-                "--xformers",
-                "--train_batch_size 8",
-                "--max_grad_norm 1",
+                "--sdpa",
                 "--save_last_n_steps_state 1",
                 "--prior_loss_weight 1",
-                "--noise_offset_type Original",
                 "--max_timestep 1000",
-            ])
-            args.extend([
                 "--optimizer_type adafactor",
                 '--optimizer_args "scale_parameter=False" "relative_step=False" "warmup_init=False"',
                 "--lr_scheduler constant",
-                "--lr_scheduler_num_cycles 1",
-                "--lr_scheduler_power 1",
+                "--max_grad_norm 1.0",
+                "--save_state",
+                "--sample_sampler euler_a",
+                "--caption_extension .txt2"
             ])
 
-        
-        
-
-        # Add sample prompts if provided
-        sample = ""
-        sample_prompts_path = resolve_path(f"outputs/{kwargs['output_name']}/sample_prompts.txt")
-        if len(kwargs['sample_prompts']) > 0 and kwargs['sample_every_n_steps'] > 0:
-            sample = f"""--sample_prompts={sample_prompts_path} --sample_every_n_steps="{kwargs['sample_every_n_steps']}" {self.line_break}"""
-
-
-        
-        if kwargs['sample_prompts']:
+        # Add sample prompts if 
+        print(kwargs['sample_prompts'])
+        print(kwargs['sample_every_n_steps'])
+        if kwargs['sample_prompts'] and kwargs['sample_every_n_steps'] and str(kwargs['sample_every_n_steps']).isdigit() and int(kwargs['sample_every_n_steps']) > 0:
+            sample_prompts_path = resolve_path(f"outputs/{kwargs['output_name']}/sample_prompts.txt")
             args.extend([
-                f"--sample_prompts {kwargs['sample_prompts']}",
+                f"--sample_prompts {sample_prompts_path}",
                 f"--sample_every_n_steps {kwargs['sample_every_n_steps']}"
             ])
 
@@ -204,18 +198,6 @@ class ScriptGenerator:
         # Get base command and add model paths
         command = [self._get_base_command(base_model)]
         
-        # Add model paths
-        paths = self._get_model_paths(base_model)
-        if "flux" in base_model:
-            command.extend([
-                f"--unet {paths['unet']}",
-                f"--clip_l {paths['clip']}",
-                f"--t5xxl {paths['t5xxl']}",
-                f"--ae {paths['vae']}"
-            ])
-        elif "sdxl" in base_model:
-            command.append(f"--pretrained_model_name_or_path {paths['pretrained']}")
-            
         # Add basic arguments
         basic_args = self._format_basic_args(
             base_model=base_model,
@@ -256,5 +238,6 @@ def generate_sh_flux(*args, **kwargs):
 def generate_sh_sdxl(*args, **kwargs):
     generator = ScriptGenerator(kwargs.pop('models'))
     return generator.generate_script(*args, **kwargs)
+
 
 
