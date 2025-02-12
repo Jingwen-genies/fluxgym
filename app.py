@@ -495,8 +495,6 @@ def gen_toml(
   batch_size
 ):
     toml = f"""[general]
-    enable_bucket = true          
-    bucket_no_upscale = true  
     shuffle_caption = false
     caption_extension = '.txt'
     keep_tokens = 1
@@ -519,9 +517,7 @@ def gen_toml_sdxl(
     num_repeats,
     batch_size
 ):
-    toml = f"""[general]
-    enable_bucket = true          
-    bucket_no_upscale = true     
+    toml = f"""[general]  
     shuffle_caption = false
     caption_extension = '.txt'
     keep_tokens = 1

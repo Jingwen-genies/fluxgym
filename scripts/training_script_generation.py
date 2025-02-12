@@ -21,6 +21,8 @@ class ScriptGenerator:
     def _get_base_command(self, base_model: str) -> str:
         """Generate base command based on model type"""
         base_parts = [
+            "export TOKENIZERS_PARALLELISM=false",
+            "",
             "accelerate launch",
             "--mixed_precision bf16",
             "--num_cpu_threads_per_process 1"
@@ -73,7 +75,6 @@ class ScriptGenerator:
         args = [
             f"--output_name {output_name}",
             f"--output_dir {output_dir}",
-            f"--resolution {kwargs['resolution']}",
             f"--seed {kwargs['seed']}",
             f"--max_data_loader_n_workers {kwargs['workers']}",
             f"--learning_rate {kwargs['learning_rate']}",
@@ -81,16 +82,14 @@ class ScriptGenerator:
             f"--max_train_epochs {kwargs['max_train_epochs']}",
             f"--save_every_n_epochs {kwargs['save_every_n_epochs']}",
             f"--dataset_config {data_config_path}",
-            "--enable_bucket",
-            "--min_bucket_reso 128",
-            "--max_bucket_reso 2048",
+            "--mixed_precision bf16",
+            "--save_precision bf16",
         ]
 
         if "flux" in base_model:
             args.extend([
                 f"--timestep_sampling {kwargs['timestep_sampling']}",
                 f"--guidance_scale {kwargs['guidance_scale']}",
-                "--save_precision bf16",
                 "--network_module networks.lora_flux",
                 "--cache_latents_to_disk",
                 "--save_model_as safetensors",
@@ -126,7 +125,6 @@ class ScriptGenerator:
                 args.append("--optimizer_type adamw8bit")
         elif "sdxl" in base_model:
             args.extend([
-                "--save_precision bf16",
                 "--network_module networks.lora",
                 "--gradient_accumulation_steps 1",
                 f"--text_encoder_lr {kwargs['learning_rate']}",
@@ -153,6 +151,10 @@ class ScriptGenerator:
                 "--sample_sampler euler_a",
                 "--caption_extension .txt2",
                 "--bucket_reso_steps 64",
+                "--enable_bucket",
+                "--bucket_no_upscale",
+                "--min_bucket_reso 128",
+                "--max_bucket_reso 2048",
 
             ])
 
