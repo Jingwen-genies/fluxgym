@@ -1151,7 +1151,7 @@ with gr.Blocks(elem_id="app", theme=theme, css=css, fill_width=True) as demo:
             with gr.Accordion("Advanced options", elem_id='advanced_options', open=False):
                 print(f"base_model.value={base_model.value}")
                 default_lr = "1e-4" if "sdxl" in base_model.value else "8e-4"
-                default_network_dim = 64 if "sdxl" in base_model.value else 4
+                default_network_dim = 4 if "sdxl" in base_model.value else 4
                 with gr.Row():
                     with gr.Column(min_width=300):
                         seed = gr.Number(label="--seed", info="Seed", value=42, interactive=True)
