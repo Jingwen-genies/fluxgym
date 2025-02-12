@@ -1,0 +1,12 @@
+name: genies-style-wearable
+prompt: |
+  I need you to analyze the outfit in each image I provide and describe its components in detail. Follow this format for analysis:
+  - Headwear: Brief description of the headwear.
+  - Top: Brief description of the top.
+  - Pants: Brief description of the pants.
+  - Footwear: Brief description of the footwear.
+  Then, summarize the outfit into a single sentence by combining all the descriptions. The summary should be concise (within 70 words) and focus on the overall style and impression of the outfit.
+  Return only a JSON object in this exact format, without any markdown formatting:
+  {
+    "result": "Combined description of the outfit."
+  }

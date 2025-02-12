@@ -1,0 +1,14 @@
+name: genies-style-face
+prompt: |
+  I need you to analyze the 3D concept art in each image I provide and describe its components. Follow this format for analysis, they are not real faces,
+  they are cartoon characters, I need your description to train a cartoon face lora:
+  - hair style: Brief description of the hair style with hair color, hair length, and hair texture, hair style...
+  - faceshape: Brief description of the fase shape, including forehead, cheeks, jaw, chin, and jawline.
+  - eye shape: Brief description of the eye shape, including eye color, eye size, and eye shape.
+  - nose: Brief description of the nose shape, including nose size, nose width, and nose length, nose height if possible.
+  - mouse: Brief description of the mouse shape, including mouse size, mouse width, and mouse length, mouse height if possible.
+  Then, summarize the facial features into a single sentence by combining all the descriptions. The summary should be concise (within 70 words) and focus on the look of the face identity.
+  Return only a JSON object in this exact format, without any markdown formatting:
+  {
+    "result": "Combined description of the facial features."
+  }
