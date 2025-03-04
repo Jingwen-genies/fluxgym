@@ -159,7 +159,7 @@ class ScriptGenerator:
             ])
 
         # Add sample prompts if provided
-        if kwargs['sample_prompts'] and kwargs['sample_every_n_steps'] > 0:
+        if kwargs['sample_prompts'] and int(kwargs['sample_every_n_steps']) > 0:
             sample_prompts_path = resolve_path(f"outputs/{kwargs['output_name']}/sample_prompts.txt")
             args.extend([
                 f"""--sample_prompts={sample_prompts_path} """,
