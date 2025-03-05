@@ -2,7 +2,10 @@
 import os
 import sys
 from typing import Dict, List, Any, Optional
+import logging
 
+# Set up basic configuration for logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def resolve_path(p):
     # Get the script directory
@@ -18,12 +21,11 @@ class ScriptGenerator:
     def __init__(self, models: Dict[str, Any]):
         self.models = models
         self.line_break = "\\"
+        logging.info("Initialized ScriptGenerator with models: %s", models)
     def _get_base_command(self, base_model: str) -> str:
         """Generate base command based on model type"""
         base_parts = [
-            "export TOKENIZERS_PARALLELISM=false",
-            "",
-            "accelerate launch",
+            "export TOKENIZERS_PARALLELISM=false\naccelerate launch",
             "--mixed_precision bf16",
             "--num_cpu_threads_per_process 1"
         ]
@@ -211,6 +213,7 @@ class ScriptGenerator:
                        original_advanced_component_values: Optional[List[Any]] = None,
                        advanced_components: Optional[List[Any]] = None) -> str:
         """Generate complete training script"""
+        logging.info("Generating script for base_model: %s", base_model)
         # Get base command and add model paths
         command = [self._get_base_command(base_model)]
         
